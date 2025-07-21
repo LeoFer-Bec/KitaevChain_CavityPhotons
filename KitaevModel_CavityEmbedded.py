@@ -9,6 +9,14 @@ of the Kitaev chain embedded into a single-mode photonic cavity.
 # The file is subject to the license terms in the file LICENSE found
 # in the top-level directory of the repository.
 
+# Updates:
+# Repeated computations in the hopping and superconducting matrices
+# saturate the code. To improve performance two new functions have been added:
+#    - hopping_indexes()
+#    - super_indexes()
+# and one function has been upgraded:
+#    - g_coup_terms()
+
 import numpy as np
 import math 
 import itertools
@@ -133,6 +141,56 @@ def hopping(t_hop,n_sites,filling,parity=None, j_neigh=1):
 
     return coo_array((value,(row, column)), shape=(o_sub_dim,o_sub_dim))
 
+def hopping_indexes(n_sites,filling,parity):
+    r""" function calculating the indexes of the
+    hopping (sparse) matrix
+    
+    
+    Parameters
+    ----------
+
+    n_sites : integer   number of lattice sites
+    filling : integer   filling factor
+    parity : string     even, odd or None
+    
+    """
+    
+    row = []
+    column = []
+    
+    if parity == None:
+        occu_list = [oo for oo in range(0,filling+1,1)]
+    elif parity == 'even':
+        occu_list = [oo for oo in range(0,filling+1,2)]
+    elif parity == 'odd':
+        occu_list = [oo for oo in range(1,filling+1,2)]
+    else:
+        print('Error: parity not recognized')
+        
+    o_sub_dim = 0
+    for oo in occu_list:
+        v_blocks = v_ocup_indx(n_sites,oo)
+        for jj in range(n_sites-1):
+    
+            v_indx_neigh_r = np.where((v_blocks[::,jj] == 1) & (v_blocks[::,jj+1]== 0))
+            v_indx_neigh_l = np.where((v_blocks[::,jj] == 0) & (v_blocks[::,jj+1]== 1))
+            
+            for mm, nn in itertools.product(v_indx_neigh_r[0],v_indx_neigh_l[0]):
+    
+                short_va = v_blocks[mm,::]
+                short_vb = v_blocks[nn,::]
+                short_va = np.delete(short_va,[jj,jj+1])
+                short_vb = np.delete(short_vb,[jj,jj+1])
+                
+                diff = short_va - short_vb
+                if np.dot(diff,diff) == 0:
+                    row.append(nn+o_sub_dim)
+                    column.append(mm+o_sub_dim)
+
+        o_sub_dim = o_sub_dim + len(v_blocks)
+        
+    return row, column, o_sub_dim
+    
 def hopping_cav(t_hop,n_sites,filling,ph_n,ph_m,gg,parity=None,i_neigh=1):
     """ function to calculate the hopping in a lattice coupled to single mode photons """
 
@@ -252,7 +310,76 @@ def supergap(Delta,n_sites,filling,parity=None, j_neigh=1):
     elif parity == 'even' or 'odd':
             return coo_array((value,(row, column)), shape=(dim_count_a+len(w_blocks),dim_count_a+len(w_blocks))) 
 
+def super_indexes(n_sites,filling,parity):
+    r""" function calculating the indexes of the
+    superconducting (sparse) matrix
+    
+    
+    Parameters
+    ----------
 
+    n_sites : integer   number of lattice sites
+    filling : integer   filling factor
+    parity : string     even, odd or None
+    
+    """
+    
+    row = []
+    column = []
+    j_site = []
+
+    if parity == None:
+        occu_list = [oo for oo in range(0,filling-1,1)]
+        skip = 1
+        dim_count_a = 1
+    elif parity == 'even':
+        occu_list = [oo for oo in range(0,filling-1,2)]
+        skip = 0
+        dim_count_a = 0
+    elif parity == 'odd':
+        occu_list = [oo for oo in range(1,filling,2)]
+        skip = 0
+        dim_count_a = 0
+    else:
+        print('Error: parity not recognized')
+        
+    dim_count_b = 0
+    for oo in occu_list:
+        v_blocks = v_ocup_indx(n_sites,oo)
+        w_blocks = v_ocup_indx(n_sites,oo+2)
+        intermed_blck = comb(n_sites,oo+skip)
+        
+        for jj in range(n_sites-1):
+
+            v_indx_neigh_blck_a = np.where((v_blocks[::,jj] == 0) & (v_blocks[::,jj+1]== 0))
+            v_indx_neigh_blck_b = np.where((w_blocks[::,jj] == 1) & (w_blocks[::,jj+1]== 1))
+
+            for mm, nn in itertools.product(v_indx_neigh_blck_a[0],v_indx_neigh_blck_b[0]):
+    
+                    short_va = v_blocks[mm,::]
+                    short_wb = w_blocks[nn,::]
+                    #print(oo,mm, short_va)
+                    #print(oo+2,nn, short_wb)
+                    short_va = np.delete(short_va,[jj,jj+1])
+                    short_wb = np.delete(short_wb,[jj,jj+1])
+
+                    diff = short_va - short_wb
+                    if np.dot(diff,diff) == 0:
+                        row.append(nn+dim_count_a+intermed_blck)
+                        column.append(mm+dim_count_b)
+                        j_site.append(jj)
+
+        dim_count_b = dim_count_b + len(v_blocks)
+        dim_count_a = dim_count_a + intermed_blck
+
+    if parity == None:
+        if filling == n_sites:
+            return row, column, j_site, dim_count_a+1
+        else:
+            return row, column, j_site, dim_count_a+len(w_blocks)
+    elif parity == 'even' or 'odd':
+            return row, column, j_site, dim_count_a+len(w_blocks)
+        
 def supergap_cav(Delta,n_sites,filling,ph_n,ph_m,gg,parity=None,j_neigh=1):
     """ function to calculate the superconducting gap in a lattice coupled to single mode photons """
     
@@ -385,7 +512,7 @@ def g_coup_terms_depre(tt,D0,gg,par,n_sites,N_ph_max):
 
     return T_pl_D
     
-def g_coup_terms(tt,D0,gg,par,n_sites,N_ph_max,N_ph_cut=5):
+def g_coup_terms_deprecated(tt,D0,gg,par,n_sites,N_ph_max,N_ph_cut=5):
     """ function to calculate the sum of all the diagonal light-matter terms """
     
     gg = gg/np.sqrt(n_sites)
@@ -411,7 +538,66 @@ def g_coup_terms(tt,D0,gg,par,n_sites,N_ph_max,N_ph_cut=5):
         spa_blocks.append(rows)
 
     return bmat(spa_blocks)
+
+def g_coup_terms(tt,D0,gg,par,n_sites,N_ph_max,N_ph_cut=5):
+    r""" function calculating the sum of the diagonal light-matter terms
+    This function is an update of the functions:
+    g_coup_terms_deprecated()
+    g_coup_terms_depre()
+    
+    Parameters
+    ----------
+
+    tt : float          hopping parameter
+    D0 : float          superconducting gap parameter
+    gg : float          light-matter coupling strength
+    par : string        even, odd or None
+    n_sites : integer   number of lattice sites
+    N_ph_max : integer  cutoff on the number of photon Fock states
+    N_ph_cut : integer  cutoff on the number of photon transitions
+    
+    """
+    gg = gg/np.sqrt(n_sites)
+    j0 = 0.5*(n_sites-1)     #conveninent if n_sites is even
         
+    hop_row, hop_column, hop_dim = hopping_indexes(n_sites,n_sites,par)
+    sup_row, sup_column, list_j, sup_dim = super_indexes(n_sites,n_sites,par)
+    
+    spa_blocks = []
+    for n_ph in range(N_ph_max):
+        rows = []
+        for m_ph in range(N_ph_max):
+            if abs(m_ph - n_ph) < N_ph_cut:
+                #print('n:',n_ph,', m:',m_ph)
+                #LD_T = hopping_cav(tt, n_sites, n_sites, n_ph, m_ph, gg, par)
+                
+                pol_in_gg = poly_J(n_ph,m_ph,gg)
+                t_dress = -tt*np.exp(-0.5*gg**2)*(-1j)**(abs(m_ph-n_ph))*pol_in_gg
+                value = [t_dress]*(len(hop_row))
+
+                LD_T = coo_array((value,(hop_row, hop_column)), shape=(hop_dim,hop_dim))
+    
+                #MixD_T = hopp_eff(tt,n_sites,n_ph,m_ph,gg,par)
+                #TT = MixD_T + MixD_T.conjugate().T
+                TT = LD_T + LD_T.conjugate().T
+                
+                #LD_D = supergap_cav(D0, n_sites, n_sites, n_ph, m_ph, gg, par)
+                argum = [gg*(2*(jj-j0)+1) for jj in list_j]
+                pol_in_arg = [poly_J(n_ph,m_ph,ph_phase) for ph_phase in argum]
+                Delta_dress = [-D0*np.exp(-0.5*argum[ll]**2)*(-1j)**(abs(m_ph-n_ph))*pol_in_arg[ll] for ll in range(len(argum))]
+
+                LD_D = coo_array((Delta_dress,(sup_row, sup_column)), shape=(sup_dim,sup_dim))
+
+                #LD_D = supgap_eff(D0,n_sites,n_ph,m_ph,gg,par)
+                DD = LD_D +  LD_D.conjugate().T
+
+                rows.append(TT+DD)
+            else:
+                rows.append(None)
+        spa_blocks.append(rows)
+
+    return bmat(spa_blocks)
+
 def g_uncoup_terms(mu,omg,par,n_sites,N_ph_max):
     """ function to calculate the sum of all the light-matter coupled terms """
     
@@ -477,14 +663,23 @@ def E_nocav(chemstr,chem,n_sit):
 
     for par in parlist:
         
+        hop_row, hop_column, hop_dim = hopping_indexes(n_sit,n_sit,par)
+        sup_row, sup_column, list_j, sup_dim = super_indexes(n_sit,n_sit,par)
+
         #Elist = []
         
         #MixD_T = hopp_eff(1.0,n_sit,0,0,0.0,par)
-        MixD_T = hopping_cav(1.0, n_sit, n_sit, 0, 0, 0, par)
-        TT = MixD_T + MixD_T.conjugate().T
-                
+        #MixD_T = hopping_cav(1.0, n_sit, n_sit, 0, 0, 0, par)
+        value = [-1.0]*(len(hop_row))
+        LD_T = coo_array((value,(hop_row, hop_column)), shape=(hop_dim,hop_dim))
+
+        TT = LD_T + LD_T.conjugate().T
+
         #LD_D = supgap_eff(0.2,n_sit,0,0,0.0,par)
-        LD_D = supergap_cav(0.2, n_sit, n_sit, 0, 0, 0, par)
+        #LD_D = supergap_cav(0.2, n_sit, n_sit, 0, 0, 0, par)
+        Delta_values = [-0.2]*len(sup_row)
+        LD_D = coo_array((Delta_values,(sup_row, sup_column)), shape=(sup_dim,sup_dim))
+        
         DD = LD_D +  LD_D.conjugate().T
 
         #for mu in muarr:
