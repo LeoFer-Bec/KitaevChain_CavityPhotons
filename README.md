@@ -1,6 +1,6 @@
 # KitaevChain_SingleModePhotons
 
-The codes in this repository simulate a Kitaev chain embbeded in a single mode photonic cavity.
+The codes in this repository simulate a Kitaev chain embedded in a single mode photonic cavity.
 
 The python file "KitaevModel_CavityEmbedded.py" computes the hamiltonian and find the eigenenergies and eigenstates.
 
